@@ -99,11 +99,14 @@ test('каталог: опубликованные задачи, фильтры,
   await expect(cards.first()).toContainText('AI-гид по городам Казахстана');
 });
 
-test('полный путь через backend: два AI-этапа в mock, публикация с 20 баллами, пересчёт до 100 и отклик', async ({ page }) => {
+test('полный путь через backend: два AI-этапа в mock, публикация с 20 баллами, пересчёт до 100 и отклик', async ({ page, baseURL }) => {
   test.setTimeout(60_000);
   const externalRequests: string[] = [];
   page.on('request', request => {
-    if (['fetch', 'xhr'].includes(request.resourceType()) && !request.url().startsWith('http://127.0.0.1:5173/')) {
+    // Installed Kaspersky injects its own browser telemetry on Windows. It is
+    // outside the app; all other external fetch/XHR calls remain test failures.
+    const injectedTelemetry = new URL(request.url()).hostname === 'gc.kis.v2.scr.kaspersky-labs.com';
+    if (['fetch', 'xhr'].includes(request.resourceType()) && !request.url().startsWith(`${baseURL}/`) && !injectedTelemetry) {
       externalRequests.push(request.url());
     }
   });

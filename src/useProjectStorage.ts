@@ -20,7 +20,7 @@ export function useProjectStorage() {
   const memoryOnly = useRef(false);
   const initialized = useRef(false);
 
-  function write(next: AppState): CommitResult {
+  function write(next: AppState, retainConflict = true): CommitResult {
     // Validation happens before changing the UI, even for a storage-only failure.
     let raw: string;
     try { raw = serializeState(next); }
@@ -30,8 +30,13 @@ export function useProjectStorage() {
     }
     const warning = saveState(next, baseline.current);
     if (warning === STORAGE_CONFLICT_MESSAGE) {
-      pendingExport.current = next;
+      if (retainConflict) {
+        pendingExport.current = next;
+        current.current = next;
+        setState(next);
+      }
       setConflict(true);
+      setHasUnsaved(Boolean(pendingExport.current) || memoryOnly.current);
       setError(warning);
       return 'conflict';
     }
@@ -60,6 +65,7 @@ export function useProjectStorage() {
         const changed = readStoredSnapshot() !== baseline.current;
         setConflict(changed);
         if (changed) setError(STORAGE_CONFLICT_MESSAGE);
+        else if (pendingExport.current) setError('Локальные изменения ещё не сохранены. Повторите сохранение или скачайте свою копию.');
         else setError(previous => previous === STORAGE_CONFLICT_MESSAGE ? null : previous);
       } catch {
         // A future write reports storage unavailability; no user data are discarded.
@@ -77,9 +83,15 @@ export function useProjectStorage() {
   }, []);
 
   function commit(updater: AppState | ((current: AppState) => AppState)): CommitResult {
-    const next = typeof updater === 'function' ? updater(current.current) : updater;
+    // Keep earlier local actions in the downloadable copy while another tab owns
+    // the latest stored snapshot. A later action must not replace that work.
+    const local = pendingExport.current ?? current.current;
+    const next = typeof updater === 'function' ? updater(local) : updater;
+    if (next === pendingExport.current) return write(next);
     if (next === current.current) return memoryOnly.current ? 'memory' : 'stored';
-    return write(next);
+    // Imports and resets replace the whole workspace. Reject a conflicting
+    // replacement without changing the active task, team or earlier local work.
+    return write(next, typeof updater === 'function');
   }
 
   function loadLatest() {
@@ -102,7 +114,7 @@ export function useProjectStorage() {
   return {
     state, notice, error, conflict, hasUnsaved, hasRecovery,
     commit, loadLatest,
-    retry: () => write(current.current),
+    retry: () => write(pendingExport.current ?? current.current),
     dismissNotice: () => setNotice(null),
     exportSnapshot: () => serializeState(pendingExport.current ?? current.current),
     exportRecovery: () => recoverySource.current ?? getRecoveryBackup(),

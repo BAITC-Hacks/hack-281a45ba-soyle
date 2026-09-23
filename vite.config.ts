@@ -11,6 +11,8 @@ export default defineConfig(({ mode }) => {
       mode: env.AI_MODE || 'mock',
       apiKey: env.OPENAI_API_KEY || '',
       model: env.OPENAI_MODEL || 'gpt-4o-mini',
+      organization: env.OPENAI_ORG_ID || '',
+      project: env.OPENAI_PROJECT_ID || '',
     })],
     test: { include: ['src/**/*.test.ts', 'server/**/*.test.ts'] },
   };

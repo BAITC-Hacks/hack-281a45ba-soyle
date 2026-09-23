@@ -15,7 +15,7 @@ interface DetailProps {
   teamId: string
   onEdit: () => void
   onBack: () => void
-  onSubmit: (input: ProposalInput) => boolean
+  onSubmit: (input: ProposalInput & { id: string }) => boolean
   onDirty: (dirty: boolean) => void
   onDecision: Decision
   onMilestone: (id: string) => void
@@ -41,6 +41,7 @@ function formatDate(value: string): string {
 }
 
 export function ProposalCard({ proposal, task, team, role, onDecision, onMilestone }: ProposalCardProps) {
+  const canManage = role === 'business' && task.ownerId === BUSINESS_ID
   return <article className={`proposal-card proposal-card-${proposal.status}`}>
     <div className="proposal-card-top">
       <div className="proposal-team">
@@ -59,7 +60,7 @@ export function ProposalCard({ proposal, task, team, role, onDecision, onMilesto
       {safeHttpUrl(proposal.prototypeUrl) && <a href={proposal.prototypeUrl.trim()} target="_blank" rel="noopener noreferrer"><Icon name="link" size={16} />Открыть прототип<Icon name="up" size={13} /></a>}
     </div>
 
-    {role === 'business' && proposal.status !== 'accepted' && <div className="proposal-actions">
+    {canManage && proposal.status !== 'accepted' && <div className="proposal-actions">
       <button className="btn btn-primary" type="button" onClick={() => onDecision(proposal.id, 'accepted')}><Icon name="check" size={17} />Выбрать команду</button>
       {proposal.status === 'pending' && <button className="btn btn-ghost proposal-reject" type="button" onClick={() => onDecision(proposal.id, 'rejected')}>Отклонить</button>}
     </div>}
@@ -68,11 +69,11 @@ export function ProposalCard({ proposal, task, team, role, onDecision, onMilesto
       <span className="proposal-milestone-icon"><Icon name={proposal.milestoneConfirmed ? 'trophy' : 'check'} size={20} /></span>
       <div>
         <strong>{proposal.milestoneConfirmed ? 'Первый этап подтверждён' : 'Следующий шаг — первый результат'}</strong>
-        <p>{proposal.milestoneConfirmed ? 'Представитель бизнеса принял результат. Команде начислено 50 баллов.' : role === 'business' ? 'Подтвердите этап, когда примете результат работы команды.' : 'Согласуйте первый этап с бизнесом. После его приёмки команда получит 50 баллов.'}</p>
+        <p>{proposal.milestoneConfirmed ? 'Представитель бизнеса принял результат. Команде начислено 50 баллов.' : canManage ? 'Подтвердите этап, когда примете результат работы команды.' : role === 'student' ? 'Согласуйте первый этап с бизнесом. После его приёмки команда получит 50 баллов.' : 'Автор задачи подтвердит этап после приёмки результата работы команды.'}</p>
       </div>
       {proposal.milestoneConfirmed
         ? <span className="proposal-points">+50 баллов</span>
-        : role === 'business' && <button type="button" className="btn btn-secondary" onClick={() => onMilestone(proposal.id)}>Подтвердить этап</button>}
+        : canManage && <button type="button" className="btn btn-secondary" onClick={() => onMilestone(proposal.id)}>Подтвердить этап</button>}
     </div>}
   </article>
 }
@@ -92,6 +93,7 @@ export default function TaskDetail({ task, state, role, teamId, onEdit, onBack, 
   const [submitted, setSubmitted] = useState(false)
   const [submitError, setSubmitError] = useState('')
   const submissionLock = useRef(false)
+  const submissionId = useRef<string | null>(null)
   const team = state.teams.find((item) => item.id === teamId)
   const visibleProposals = state.proposals.filter((proposal) => proposal.taskId === task.id && (role === 'business' || proposal.teamId === teamId))
   const rating = getRating(task)
@@ -102,6 +104,7 @@ export default function TaskDetail({ task, state, role, teamId, onEdit, onBack, 
     setSubmitted(false)
     setSubmitError('')
     submissionLock.current = false
+    submissionId.current = null
   }, [task.id, teamId, role])
 
   function change(key: keyof ProposalInput, value: string) {
@@ -133,12 +136,14 @@ export default function TaskDetail({ task, state, role, teamId, onEdit, onBack, 
     if (!team || !task.published) return
     submissionLock.current = true
     try {
-      if (!onSubmit(values)) {
+      submissionId.current ??= crypto.randomUUID()
+      if (!onSubmit({ ...values, id: submissionId.current })) {
         submissionLock.current = false
         setSubmitError('Предложение не отправлено. Проверьте сообщение о сохранении выше; текст остался в форме.')
         return
       }
       setInput(blankProposal())
+      submissionId.current = null
       setSubmitError('')
       setSubmitted(true)
       onDirty(false)
@@ -176,7 +181,7 @@ export default function TaskDetail({ task, state, role, teamId, onEdit, onBack, 
 
         <section className="detail-proposals" aria-labelledby="detail-proposals-title">
           <div className="detail-list-heading"><div><span className="eyebrow">ОТ ИДЕИ К СОТРУДНИЧЕСТВУ</span><h2 id="detail-proposals-title">{role === 'business' ? 'Предложения команд' : 'Предложения вашей команды'}<span className="detail-count">{visibleProposals.length}</span></h2></div></div>
-          {role === 'business' && visibleProposals.length > 0 && <p className="detail-proposals-hint">Выберите одну или несколько команд. Решение о сотрудничестве принимаете вы.</p>}
+          {role === 'business' && task.ownerId === BUSINESS_ID && visibleProposals.length > 0 && <p className="detail-proposals-hint">Выберите одну или несколько команд. Решение о сотрудничестве принимаете вы.</p>}
           {visibleProposals.length > 0
             ? <div className="detail-proposals-list">{visibleProposals.map((proposal) => {
               const proposalTeam = state.teams.find((item) => item.id === proposal.teamId)

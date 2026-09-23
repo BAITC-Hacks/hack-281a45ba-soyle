@@ -26,7 +26,7 @@ export default function DataTools({ onExport, onImport, onReset, onRecovery }: {
       if (requestId.current !== currentRequest) return;
       const next = parseState(raw);
       if (!window.confirm(`В копии ${next.tasks.length} задач, ${next.teams.length} команд и ${next.proposals.length} откликов. Заменить текущие данные? Сначала скачайте свою копию, если хотите сохранить её.`)) return;
-      if (!onImport(next)) setError('Копия не загружена: сначала устраните конфликт с другой вкладкой. Текущие данные сохранены.');
+      if (!onImport(next)) setError('Копия не загружена: замена данных отменена или сохранение отклонено. Текущие данные не заменены.');
     } catch (reason) {
       if (requestId.current === currentRequest) setError(reason instanceof Error ? reason.message : 'Не удалось прочитать файл. Выберите резервную копию Soyle в формате JSON.');
     } finally {

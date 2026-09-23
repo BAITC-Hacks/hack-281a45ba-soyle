@@ -28,6 +28,22 @@ afterEach(() => {
 })
 
 describe('два этапа серверного mock', () => {
+  it('берёт явное название из ответа вместо предварительного заголовка', () => {
+    const input = request('card', 'Описание '.repeat(30))
+    input.answers = [answer('title', 'Панель обращений')]
+    expect(card(input).card.title).toBe('Панель обращений')
+    expect(card(request('card', 'я'.repeat(200))).card.title).toHaveLength(160)
+  })
+
+  it('объясняет переполнение объединённого поля, не обрезая введённые сведения', () => {
+    const input = request('card')
+    input.fields.data = 'а'.repeat(20_000)
+    input.answers = [answer('data', 'Дополнительные сведения')]
+    expect(() => card(input)).toThrow('Данные и материалы» после объединения превышает 20000')
+    expect(input.fields.data).toHaveLength(20_000)
+    expect(input.answers[0].answer).toBe('Дополнительные сведения')
+  })
+
   it('задает минимум три вопроса о пропусках и не повторяет явно указанный результат', () => {
     const input = request('questions', 'Нам нужен сайт для магазина.')
     const result = questions(input)

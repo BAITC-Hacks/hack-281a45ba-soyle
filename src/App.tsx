@@ -7,6 +7,8 @@ import DataTools from './DataTools';
 import { Icon, EmptyState, RatingBadge, type IconName } from './components';
 import TaskEditor from './TaskEditor';
 import TaskDetail, { ProposalCard } from './TaskDetail';
+import { compareTaskMatches, getTaskMatch, type TaskMatch } from './matching';
+import './matching.css';
 
 type Page = 'catalog' | 'mine' | 'proposals' | 'teams' | 'guide' | 'detail' | 'editor';
 const levelOptions: { value: RatingLevel; label: string }[] = [{ value: 'clarify', label: 'Черновик' }, { value: 'working', label: 'Рабочая' }, { value: 'ready', label: 'Готовая' }, { value: 'priority', label: 'Приоритетная' }];
@@ -33,6 +35,7 @@ function App() {
   const [topic, setTopic] = useState('all');
   const [level, setLevel] = useState('all');
   const [sort, setSort] = useState('rating');
+  const [matchesOnly, setMatchesOnly] = useState(false);
   const [mineFilter, setMineFilter] = useState('all');
   const [proposalFilter, setProposalFilter] = useState('all');
   const dirty = useRef(false);
@@ -50,13 +53,14 @@ function App() {
     dirty.current = false; return true;
   };
   const navigate = (next: Page) => { if (leaveEditor()) { setPage(next); setEditing(null); } };
-  const changeRole = (next: Role) => { if (next !== role && leaveEditor()) { setRole(next); setPage('catalog'); setEditing(null); setProposalFilter('all'); setToast(next === 'student' ? 'Вы в роли студенческой команды' : 'Вы в роли представителя бизнеса'); } };
+  const changeRole = (next: Role) => { if (next !== role && leaveEditor()) { setRole(next); setPage('catalog'); setEditing(null); setProposalFilter('all'); setSort(next === 'student' ? 'team' : 'rating'); setMatchesOnly(false); setToast(next === 'student' ? 'Вы в роли студенческой команды' : 'Вы в роли представителя бизнеса'); } };
   const changeTeam = (next: string) => { if (next !== teamId && leaveEditor()) { setTeamId(next); setProposalFilter('all'); } };
   const openTask = (task: Task) => { if (leaveEditor()) { setTaskId(task.id); setPage('detail'); } };
   const createTask = (source = '') => {
     if (!leaveEditor()) return;
     const now = new Date().toISOString();
     setRole('business');
+    if (role === 'student') { setSort('rating'); setMatchesOnly(false); }
     setEditing({ id: crypto.randomUUID(), ownerId: BUSINESS_ID, company: 'Мой бизнес', fields: emptyFields(), confirmedFields: [], published: false, source, createdAt: now, updatedAt: now });
     setPage('editor');
   };
@@ -73,11 +77,21 @@ function App() {
     dirty.current = false; setTaskId(task.id); setPage('detail'); setEditing(null);
     return true;
   };
-  const submitProposal = (input: { idea: string; plan: string; timeline: string; prototypeUrl: string }) => {
-    const task = state.tasks.find(t => t.id === taskId);
-    if (role !== 'student' || !task?.published) return false;
-    const proposal: Proposal = { ...input, id: crypto.randomUUID(), taskId: task.id, teamId, status: 'pending', milestoneConfirmed: false, createdAt: new Date().toISOString() };
-    const result = storage.commit(current => ({ ...current, proposals: [proposal, ...current.proposals] }));
+  const submitProposal = (input: { id: string; idea: string; plan: string; timeline: string; prototypeUrl: string }) => {
+    if (role !== 'student') return false;
+    let permitted = true;
+    const result = storage.commit(current => {
+      const task = current.tasks.find(t => t.id === taskId && t.published);
+      const existing = current.proposals.find(p => p.id === input.id);
+      if (!task || !current.teams.some(t => t.id === teamId)
+        || (existing && (existing.taskId !== task.id || existing.teamId !== teamId || existing.status !== 'pending'))) {
+        permitted = false;
+        return current;
+      }
+      const proposal: Proposal = { ...input, taskId: task.id, teamId, status: 'pending', milestoneConfirmed: false, createdAt: existing?.createdAt ?? new Date().toISOString() };
+      return { ...current, proposals: existing ? current.proposals.map(p => p.id === input.id ? proposal : p) : [proposal, ...current.proposals] };
+    });
+    if (!permitted) return false;
     const accepted = notifyCommit(result, 'Предложение отправлено! Решение появится в «Моих откликах».');
     if (accepted) { dirty.current = false; setProposalFilter('all'); }
     return accepted;
@@ -97,7 +111,7 @@ function App() {
     notifyCommit(result, 'Этап подтверждён. Команда получила 50 баллов за прогресс!');
   };
   const resetView = (next: AppState) => {
-    dirty.current = false; setTeamId(next.teams[0].id); setRole('business'); setPage('catalog'); setTaskId(null); setEditing(null); setSearch(''); setTopic('all'); setLevel('all'); setSort('rating'); setMineFilter('all'); setProposalFilter('all');
+    dirty.current = false; setTeamId(next.teams[0].id); setRole('business'); setPage('catalog'); setTaskId(null); setEditing(null); setSearch(''); setTopic('all'); setLevel('all'); setSort('rating'); setMatchesOnly(false); setMineFilter('all'); setProposalFilter('all');
   };
   const resetData = () => {
     if (!window.confirm('Восстановить демонстрационные данные? Все ваши задачи, отклики и изменения в этом браузере будут заменены.')) return;
@@ -133,10 +147,17 @@ function App() {
   const task = state.tasks.find(t => t.id === taskId);
   const visibleProposals = state.proposals.filter(p => role === 'student' ? p.teamId === teamId : owned.some(t => t.id === p.taskId));
   const pendingCount = visibleProposals.filter(p => p.status === 'pending').length;
+  const teamMatches = new Map(published.map(t => [t.id, getTaskMatch(t, team)]));
   const catalog = published.filter(t => {
     const q = search.trim().toLocaleLowerCase('ru');
-    return (!q || `${t.fields.title} ${t.fields.need} ${t.fields.context} ${t.company}`.toLocaleLowerCase('ru').includes(q)) && (topic === 'all' || t.fields.topic === topic) && (level === 'all' || getRating(t).level === level);
-  }).sort((a, b) => sort === 'newest' ? Date.parse(b.createdAt) - Date.parse(a.createdAt) : sort === 'rating-asc' ? getRating(a).score - getRating(b).score : getRating(b).score - getRating(a).score);
+    return (!q || `${t.fields.title} ${t.fields.need} ${t.fields.context} ${t.company}`.toLocaleLowerCase('ru').includes(q)) && (topic === 'all' || t.fields.topic === topic) && (level === 'all' || getRating(t).level === level) && (role !== 'student' || !matchesOnly || teamMatches.get(t.id)?.hasMatch);
+  }).sort((a, b) => {
+    if (sort === 'team' && role === 'student') {
+      const comparison = compareTaskMatches(teamMatches.get(a.id)!, teamMatches.get(b.id)!);
+      if (comparison) return comparison;
+    }
+    return sort === 'newest' ? Date.parse(b.createdAt) - Date.parse(a.createdAt) : sort === 'rating-asc' ? getRating(a).score - getRating(b).score : getRating(b).score - getRating(a).score;
+  });
 
   const navItems: { id: Page; icon: IconName; label: string; count?: number }[] = [
     { id: 'catalog', icon: 'grid', label: 'Каталог задач' },
@@ -162,7 +183,14 @@ function App() {
         {page === 'catalog' && <>
           <section className="catalog-hero"><div className="hero-copy"><div className="hero-eyebrow"><span/> БИЗНЕС × СТУДЕНТЫ</div><h1>Большие идеи.<br/><span>Реальные задачи.</span></h1><p>Бизнес находит свежие решения.<br/>Команды получают опыт, который имеет значение.</p><button className="btn btn-primary" onClick={() => role === 'business' ? createTask() : document.getElementById('catalog-list')?.scrollIntoView({ behavior: 'smooth' })}>{role === 'business' ? 'Разместить задачу' : 'Найти свою задачу'}<Icon name="up" size={17}/></button><div className="hero-footnote"><span className="tiny-avatars"><i>А</i><i>М</i><i>Д</i></span><span>{state.teams.length} команд готовы создавать новое</span></div></div><div className="hero-art" aria-hidden="true"><div className="orbit orbit-one"/><div className="orbit orbit-two"/><span className="art-spark spark-one">✳</span><span className="art-spark spark-two">✧</span><div className="floating-card idea-card"><span className="art-icon"><Icon name="briefcase" size={25}/></span><div><small>У БИЗНЕСА ЕСТЬ</small><b>Большая идея</b></div><span className="art-dot"/></div><div className="connection-line"/><div className="floating-card team-card"><span className="art-icon"><Icon name="code" size={27}/></span><div><small>У КОМАНДЫ ЕСТЬ</small><b>Свежий взгляд</b></div></div><div className="match-pill"><span><Icon name="check" size={15}/></span>Вместе — к результату</div><div className="art-label">От первого вопроса до первого проекта ↗</div></div></section>
           <section className="stats-row" aria-label="Платформа в цифрах"><Stat icon="folder" value={published.length} label="открытых задач" detail="Можно откликаться"/><Stat icon="people" value={state.teams.length} label="студенческих команд" detail="Разные навыки. Общая цель."/><Stat icon="spark" value={published.filter(t => getRating(t).score >= 70).length} label="задач готовы к старту" detail="Рейтинг готовности от 70"/></section>
-          <section id="catalog-list" className="catalog-section"><div className="section-heading"><div className="heading-line"><h2>Каталог задач</h2><span className="count-pill">{published.length}</span></div><span className="muted catalog-caption">Найдите точку приложения своих идей</span></div><div className="catalog-toolbar"><label className="search-field"><Icon name="search" size={19}/><input value={search} onChange={e => setSearch(e.target.value)} placeholder="Название, компания или ключевое слово" aria-label="Поиск задач"/>{search && <button className="icon-button" aria-label="Очистить поиск" onClick={() => setSearch('')}><Icon name="close" size={16}/></button>}</label><select aria-label="Фильтр по теме" value={topic} onChange={e => setTopic(e.target.value)}><option value="all">Все направления</option>{topics.map(t => <option key={t}>{t}</option>)}</select><select aria-label="Фильтр по готовности" value={level} onChange={e => setLevel(e.target.value)}><option value="all">Любая готовность</option>{levelOptions.map(l => <option key={l.value} value={l.value}>{l.label}</option>)}</select></div><div className="catalog-meta"><span>Найдено задач: <b>{catalog.length}</b></span><label>Сначала <select aria-label="Сортировка задач" value={sort} onChange={e => setSort(e.target.value)}><option value="rating">самые готовые</option><option value="rating-asc">с низким рейтингом</option><option value="newest">новые</option></select></label></div><div className="task-grid">{catalog.map(t => <TaskCard key={t.id} task={t} proposalCount={state.proposals.filter(p => p.taskId === t.id).length} onOpen={() => openTask(t)}/>)}</div>{!catalog.length && <EmptyState title="Пока ничего не нашлось" action={<button className="btn btn-secondary" onClick={() => { setSearch(''); setTopic('all'); setLevel('all'); }}>Сбросить фильтры</button>}>Попробуйте другое слово или расширьте поиск.</EmptyState>}</section>
+          <section id="catalog-list" className="catalog-section">
+            <div className="section-heading"><div className="heading-line"><h2>Каталог задач</h2><span className="count-pill">{published.length}</span></div><span className="muted catalog-caption">Найдите точку приложения своих идей</span></div>
+            {role === 'student' && <div className="matching-panel"><div><strong>Подбор для {team.name}</strong><p>Сначала совпадение направления с интересами, затем упоминания навыков и технологий. При равенстве — готовность задачи. Это подсказки по тексту: требования и ограничения уточняйте в карточке.</p></div><label className="matching-filter"><input type="checkbox" checked={matchesOnly} onChange={e => setMatchesOnly(e.target.checked)}/>Только с совпадениями</label></div>}
+            <div className="catalog-toolbar"><label className="search-field"><Icon name="search" size={19}/><input value={search} onChange={e => setSearch(e.target.value)} placeholder="Название, компания или ключевое слово" aria-label="Поиск задач"/>{search && <button className="icon-button" aria-label="Очистить поиск" onClick={() => setSearch('')}><Icon name="close" size={16}/></button>}</label><select aria-label="Фильтр по теме" value={topic} onChange={e => setTopic(e.target.value)}><option value="all">Все направления</option>{topics.map(t => <option key={t}>{t}</option>)}</select><select aria-label="Фильтр по готовности" value={level} onChange={e => setLevel(e.target.value)}><option value="all">Любая готовность</option>{levelOptions.map(l => <option key={l.value} value={l.value}>{l.label}</option>)}</select></div>
+            <div className="catalog-meta"><span>Найдено задач: <b>{catalog.length}</b></span><label>Сначала <select aria-label="Сортировка задач" value={sort} onChange={e => setSort(e.target.value)}>{role === 'student' && <option value="team">совпадения с командой</option>}<option value="rating">самые готовые</option><option value="rating-asc">с низким рейтингом</option><option value="newest">новые</option></select></label></div>
+            <div className="task-grid">{catalog.map(t => <TaskCard key={t.id} task={t} proposalCount={state.proposals.filter(p => p.taskId === t.id).length} onOpen={() => openTask(t)} match={role === 'student' ? teamMatches.get(t.id) : undefined}/>)}</div>
+            {!catalog.length && <EmptyState title="Пока ничего не нашлось" action={<button className="btn btn-secondary" onClick={() => { setSearch(''); setTopic('all'); setLevel('all'); setMatchesOnly(false); }}>Сбросить фильтры</button>}>Попробуйте другое слово или расширьте поиск.</EmptyState>}
+          </section>
           <div className="catalog-note"><Icon name="shield" size={18}/><span>Все задачи открыты для каждой команды. Решение о сотрудничестве принимает бизнес.</span><button onClick={() => navigate('guide')}>Подробнее<Icon name="arrow" size={15}/></button></div>
         </>}
         {page === 'mine' && role === 'business' && <><PageIntro eyebrow="ОТ ИДЕИ К ПЕРВОМУ ОТКЛИКУ" title="Мои задачи" description="Дополняйте описание, повышайте готовность и находите свою команду." action={<button className="btn btn-primary" onClick={() => createTask()}><Icon name="plus" size={18}/>Новая задача</button>}/><div className="filter-tabs">{[{ id: 'all', label: 'Все задачи' }, { id: 'published', label: 'Опубликованные' }, { id: 'draft', label: 'Черновики' }].map(f => <button key={f.id} aria-pressed={mineFilter === f.id} onClick={() => setMineFilter(f.id)} className={mineFilter === f.id ? 'active' : ''}>{f.label}<span>{owned.filter(t => f.id === 'all' || (f.id === 'published' ? t.published : !t.published)).length}</span></button>)}</div><div className="task-grid">{owned.filter(t => mineFilter === 'all' || (mineFilter === 'published' ? t.published : !t.published)).map(t => <TaskCard key={t.id} task={t} proposalCount={state.proposals.filter(p => p.taskId === t.id).length} onOpen={() => openTask(t)}/>)}</div>{!owned.some(t => mineFilter === 'all' || (mineFilter === 'published' ? t.published : !t.published)) && <EmptyState title="Задач пока нет" action={<button className="btn btn-secondary" onClick={() => owned.length ? setMineFilter('all') : createTask()}>{owned.length ? 'Показать все задачи' : 'Создать задачу'}</button>}>Здесь появятся ваши задачи с выбранным статусом.</EmptyState>}</>}
@@ -185,13 +213,14 @@ function Stat({ icon, value, label, detail }: { icon: IconName; value: number; l
 function PageIntro({ eyebrow, title, description, action }: { eyebrow: string; title: string; description: string; action?: React.ReactNode }) {
   return <div className="page-intro"><div><div className="eyebrow">{eyebrow}</div><h1 className="page-title">{title}</h1><p>{description}</p></div>{action}</div>;
 }
-function TaskCard({ task, proposalCount, onOpen }: { task: Task; proposalCount: number; onOpen: () => void }) {
+function TaskCard({ task, proposalCount, onOpen, match }: { task: Task; proposalCount: number; onOpen: () => void; match?: TaskMatch }) {
   const rating = getRating(task);
   const style = topicStyles[task.fields.topic] ?? { icon: 'code' as IconName, color: 'blue' };
   return <article className={`task-card ${rating.level === 'priority' && task.published ? 'task-priority' : ''}`} data-testid="task-card" data-rating={rating.score}>
     <div className="task-card-top"><span className={`task-topic-icon ${style.color}`}><Icon name={style.icon} size={23}/></span><span className="task-topic">{task.fields.topic || 'Без направления'}</span>{!task.published ? <span className="draft-badge">Черновик</span> : rating.level === 'priority' ? <span className="priority-star" title="Приоритетная задача"><Icon name="spark" size={18}/></span> : null}</div>
     <h3><button onClick={onOpen}>{task.fields.title || 'Новая задача'}</button></h3><p className="task-description">{task.fields.need || task.fields.context || task.source || 'Добавьте описание и сделайте первый шаг к сотрудничеству.'}</p>
     <div className="task-company"><span>{task.company.slice(0, 1)}</span>{task.company}</div>
+    {match && <div className="task-match" aria-label="Совпадения с командой">{match.hasMatch ? <><strong>Почему стоит посмотреть</strong><ul>{match.interest && <li>Ваше направление: {match.interest}</li>}{match.mentions.map(mention => <li key={mention.label}>{mention.label}: в задаче есть «{mention.evidence}»</li>)}</ul></> : <p>Явных совпадений с профилем нет. Вы можете предложить своё решение.</p>}</div>}
     <div className="task-rating-row"><RatingBadge task={task}/><span className="task-score"><b>{rating.score}</b><span>/100</span></span></div><div className={`task-score-track ${rating.level}`}><i style={{ width: `${rating.score}%` }}/></div>
     <div className="task-card-footer"><span><Icon name="message" size={15}/>{proposalCount} откликов</span><button onClick={onOpen} aria-label={`Подробнее: ${task.fields.title || 'Новая задача'}`}>{task.published ? 'Подробнее' : 'Открыть черновик'}<Icon name="up" size={16}/></button></div>
   </article>;

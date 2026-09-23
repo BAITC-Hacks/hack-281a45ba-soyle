@@ -385,7 +385,8 @@ function sourceCard(description: string): Card {
   if (!card.title && sentences.length) {
     // A verbatim short excerpt is a provisional title, not a newly invented business fact.
     const first = sentences[0]
-    const end = first.length > 160 ? Math.max(first.lastIndexOf(' ', 160), 1) : first.length
+    const wordEnd = first.lastIndexOf(' ', 160)
+    const end = first.length > 160 ? (wordEnd > 0 ? wordEnd : 160) : first.length
     card.title = first.slice(0, Math.min(end, 160)).trim() || null
   }
   return card
@@ -396,7 +397,14 @@ function assembleMockCard(request: AIRequest): Card {
   for (const key of CARD_KEYS) {
     const manual = request.fields[CARD_TO_FIELD[key]]
     if (hasContent(manual)) card[key] = manual
-    for (const answer of request.answers) if (answer.field === key) card[key] = appendFact(card[key], answer.answer)
+    const suppliedAnswers = request.answers.filter(answer => answer.field === key && hasContent(answer.answer) && !isUnknown(answer.answer))
+    // An explicit title answer replaces a provisional source excerpt. Manual fields remain authoritative.
+    if (key === 'title' && !hasContent(manual) && suppliedAnswers.length) card.title = null
+    for (const answer of suppliedAnswers) card[key] = appendFact(card[key], answer.answer)
+    const maximum = key === 'title' ? 160 : MAX_TEXT_LENGTH
+    if ((card[key]?.length ?? 0) > maximum) {
+      throw new Error(`Поле «${FIELD_NAMES[CARD_TO_FIELD[key]]}» после объединения превышает ${maximum} символов. Сократите ответ или текст поля; исходный ввод сохранён.`)
+    }
   }
   return card
 }

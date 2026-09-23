@@ -3,13 +3,26 @@ import type { Plugin } from 'vite'
 import { AI_PROMPT, AI_SCHEMAS, CARD_KEYS, CARD_TO_FIELD, createMockResponse, validateAIRequest, validateAnalysis, validateCardResult, type AIRequest, type CardResult } from '../src/ai'
 import { FIELD_KEYS, getRating, hasContent, normalizeVisibleText, type FieldKey, type TaskFields } from '../src/domain'
 
-export interface ApiConfig { mode: string; apiKey: string; model: string }
+export interface ApiConfig { mode: string; apiKey: string; model: string; organization?: string; project?: string }
 export const MAX_REQUEST_BYTES = 512 * 1024
 const MAX_RESPONSE_BYTES = 512 * 1024
 const PROVIDER_TIMEOUT_MS = 25_000
 
 class ApiError extends Error {
   constructor(readonly status: number, message: string) { super(message) }
+}
+
+/** Configuration check only; never claims the credential has been accepted by OpenAI. */
+export function getAIStatus(config: ApiConfig) {
+  if (config.mode === 'mock') return { mode: 'mock', configured: true, message: 'Деморежим: вопросы и карточка создаются локально, без языковой модели.' }
+  if (config.mode !== 'openai') return { mode: 'invalid', configured: false, message: 'Проверьте AI_MODE на сервере: допустимы mock и openai.' }
+  const apiKey = config.apiKey.trim()
+  if (!apiKey) return { mode: 'openai', configured: false, message: 'AI не настроен: добавьте OPENAI_API_KEY в локальный .env или включите AI_MODE=mock. Идентификатор организации org-… не заменяет API-ключ.' }
+  if (/^(org-|proj_)/i.test(apiKey)) return { mode: 'openai', configured: false, message: 'В OPENAI_API_KEY указан идентификатор организации или проекта. Перенесите его в OPENAI_ORG_ID или OPENAI_PROJECT_ID и задайте отдельный API-ключ.' }
+  if (/\s/u.test(apiKey)) return { mode: 'openai', configured: false, message: 'Проверьте OPENAI_API_KEY: внутри ключа не должно быть пробелов или переносов строк.' }
+  if (!config.model.trim()) return { mode: 'openai', configured: false, message: 'AI не настроен: задайте OPENAI_MODEL на сервере.' }
+  if ([config.organization, config.project].some(value => value && /[\r\n]/u.test(value))) return { mode: 'openai', configured: false, message: 'Проверьте OPENAI_ORG_ID и OPENAI_PROJECT_ID: значение должно занимать одну строку.' }
+  return { mode: 'openai', configured: true, message: 'OpenAI: ключ задан. Доступ к модели будет проверен при первом запросе.' }
 }
 
 function record(value: unknown): value is Record<string, unknown> {
@@ -101,18 +114,25 @@ async function boundedResponse(response: Response): Promise<string> {
 }
 
 export async function requestAI(input: AIRequest, config: ApiConfig, fetchProvider: typeof fetch = fetch, timeoutMs = PROVIDER_TIMEOUT_MS) {
-  if (config.mode === 'mock') return createMockResponse(input)
-  if (config.mode !== 'openai') throw new ApiError(503, 'Проверьте AI_MODE на сервере: допустимы mock и openai.')
-  if (!config.apiKey.trim()) throw new ApiError(503, 'AI не настроен: добавьте OPENAI_API_KEY на сервере или включите AI_MODE=mock.')
+  if (config.mode === 'mock') {
+    try { return createMockResponse(input) }
+    catch (error) { throw new ApiError(400, error instanceof Error ? error.message : 'Проверьте описание и ответы.') }
+  }
+  const status = getAIStatus(config)
+  if (!status.configured) throw new ApiError(503, status.message)
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), timeoutMs)
   try {
     const response = await fetchProvider('https://api.openai.com/v1/responses', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${config.apiKey}` },
+      headers: {
+        'Content-Type': 'application/json', Authorization: `Bearer ${config.apiKey.trim()}`,
+        ...(config.organization?.trim() ? { 'OpenAI-Organization': config.organization.trim() } : {}),
+        ...(config.project?.trim() ? { 'OpenAI-Project': config.project.trim() } : {}),
+      },
       signal: controller.signal,
       body: JSON.stringify({
-        model: config.model, store: false, max_output_tokens: 6000,
+        model: config.model.trim(), store: false, max_output_tokens: 6000,
         instructions: AI_PROMPT,
         input: JSON.stringify(input),
         text: { format: { type: 'json_schema', name: `soyle_${input.stage}`, strict: true, schema: AI_SCHEMAS[input.stage] } },
@@ -120,6 +140,10 @@ export async function requestAI(input: AIRequest, config: ApiConfig, fetchProvid
     })
     if (!response.ok) {
       await response.body?.cancel()
+      if (response.status === 401) throw new ApiError(503, 'OpenAI отклонил API-ключ. Проверьте OPENAI_API_KEY и принадлежность к организации; org-… не является ключом.')
+      if (response.status === 403) throw new ApiError(503, 'Нет доступа к OpenAI API. Проверьте права ключа, OPENAI_ORG_ID и OPENAI_PROJECT_ID.')
+      if (response.status === 404) throw new ApiError(503, 'Модель OpenAI недоступна. Проверьте OPENAI_MODEL и доступ проекта к этой модели.')
+      if (response.status === 400) throw new ApiError(502, 'OpenAI не принял запрос. Проверьте, поддерживает ли OPENAI_MODEL Responses API и структурированный JSON.')
       if (response.status === 429) throw new ApiError(503, 'Лимит AI API исчерпан. Повторите позже или включите деморежим на сервере.')
       throw new ApiError(502, 'AI API недоступен. Проверьте настройки сервера и повторите попытку.')
     }
@@ -162,15 +186,20 @@ export function createApiHandler(config: ApiConfig, fetchProvider: typeof fetch 
     const path = request.url?.split('?', 1)[0] || ''
     if (!path.startsWith('/api/')) { next(); return }
     try {
-      if (!['/api/ai', '/api/tasks/confirm', '/api/tasks/publish'].includes(path)) throw new ApiError(404, 'Такого API-маршрута нет.')
-      if (request.method !== 'POST') throw new ApiError(405, 'Используйте POST-запрос.')
-      if (!request.headers['content-type']?.toLowerCase().startsWith('application/json')) throw new ApiError(415, 'Ожидается Content-Type: application/json.')
+      if (!['/api/health', '/api/ai', '/api/tasks/confirm', '/api/tasks/publish'].includes(path)) throw new ApiError(404, 'Такого API-маршрута нет.')
       // This local MVP API is used by the same app origin; no cross-site use of the server key.
       if (request.headers.origin) {
         let origin: URL
         try { origin = new URL(request.headers.origin) } catch { throw new ApiError(403, 'Недопустимый источник запроса.') }
         if (origin.host !== request.headers.host || !['http:', 'https:'].includes(origin.protocol)) throw new ApiError(403, 'Недопустимый источник запроса.')
       }
+      if (path === '/api/health') {
+        if (request.method !== 'GET') throw new ApiError(405, 'Используйте GET-запрос.')
+        json(response, 200, { ai: getAIStatus(config) })
+        return
+      }
+      if (request.method !== 'POST') throw new ApiError(405, 'Используйте POST-запрос.')
+      if (request.headers['content-type']?.split(';', 1)[0].trim().toLowerCase() !== 'application/json') throw new ApiError(415, 'Ожидается Content-Type: application/json.')
       const value = await readBody(request)
       if (path === '/api/ai') {
         let input: AIRequest

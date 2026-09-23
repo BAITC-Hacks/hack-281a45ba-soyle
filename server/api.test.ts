@@ -1,7 +1,7 @@
 import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
-import { createApiHandler, MAX_REQUEST_BYTES, requestAI, type ApiConfig } from './api'
+import { createApiHandler, getAIStatus, MAX_REQUEST_BYTES, requestAI, type ApiConfig } from './api'
 import { CARD_KEYS, createMockResponse, type AIRequest, type CardResult } from '../src/ai'
 import { emptyFields, FIELD_KEYS, getRating } from '../src/domain'
 
@@ -59,6 +59,42 @@ describe('серверный AI adapter', () => {
     await expect(requestAI(input(), { ...mockConfig, mode: 'typo' })).rejects.toThrow('AI_MODE')
   })
 
+  it('не использует ID организации или проекта как API-ключ и не вызывает сеть', async () => {
+    const network = vi.fn<typeof fetch>()
+    for (const apiKey of ['org-example', 'proj_example']) {
+      await expect(requestAI(input(), { ...openaiConfig, apiKey }, network)).rejects.toThrow('идентификатор')
+    }
+    expect(network).not.toHaveBeenCalled()
+    expect(getAIStatus({ ...openaiConfig, apiKey: '', organization: 'org-example' })).toMatchObject({ configured: false })
+  })
+
+  it('передаёт организацию и проект отдельными заголовками без раскрытия в статусе', async () => {
+    const config = { ...openaiConfig, apiKey: ' test-server-secret ', organization: ' org-example ', project: ' proj_example ' }
+    const network = fakeFetch(providerText(JSON.stringify(createMockResponse(input()))))
+    await requestAI(input(), config, network)
+    expect(network.mock.calls[0][1]?.headers).toMatchObject({
+      Authorization: 'Bearer test-server-secret', 'OpenAI-Organization': 'org-example', 'OpenAI-Project': 'proj_example',
+    })
+    const status = JSON.stringify(getAIStatus(config))
+    expect(status).not.toContain('test-server-secret')
+    expect(status).not.toContain('org-example')
+    expect(status).not.toContain('proj_example')
+    expect(getAIStatus(config).message).toContain('будет проверен')
+  })
+
+  it.each([[401, 'API-ключ'], [403, 'Нет доступа'], [404, 'Модель'], [400, 'не принял запрос']])('объясняет ошибку OpenAI %s без тела провайдера', async (status, message) => {
+    const pending = requestAI(input(), openaiConfig, fakeFetch(new Response('private upstream detail', { status })))
+    await expect(pending).rejects.toThrow(message)
+    await expect(pending).rejects.not.toThrow('private upstream detail')
+  })
+
+  it('проверяет пустую модель и пробелы в ключе до сетевого запроса', async () => {
+    const network = vi.fn<typeof fetch>()
+    await expect(requestAI(input(), { ...openaiConfig, model: ' ' }, network)).rejects.toThrow('OPENAI_MODEL')
+    await expect(requestAI(input(), { ...openaiConfig, apiKey: 'key\nvalue' }, network)).rejects.toThrow('пробелов')
+    expect(network).not.toHaveBeenCalled()
+  })
+
   it('прерывает зависший вызов по timeout', async () => {
     const network = vi.fn<typeof fetch>().mockImplementation((_url, options) => new Promise((_resolve, reject) => {
       options?.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')))
@@ -108,6 +144,24 @@ describe('HTTP API подтверждения и публикации', () => {
     expect(Object.keys((await card.json()).card)).toHaveLength(10)
   })
 
+  it('сообщает режим конфигурации до первого AI-запроса', async () => {
+    const response = await fetch(base + '/api/health')
+    expect(response.status).toBe(200)
+    expect(response.headers.get('cache-control')).toBe('no-store')
+    expect(await response.json()).toMatchObject({ ai: { mode: 'mock', configured: true } })
+    expect((await post('/api/health', {})).status).toBe(405)
+    expect((await fetch(base + '/api/health', { headers: { Origin: 'https://foreign.example' } })).status).toBe(403)
+  })
+
+  it('объясняет переполнение объединённого поля mock по HTTP', async () => {
+    const request = input('card')
+    request.fields.data = 'а'.repeat(20_000)
+    request.answers = [{ id: 'q1', field: 'data', question: 'Какие данные доступны?', answer: 'Ещё один файл' }]
+    const response = await post('/api/ai', request)
+    expect(response.status).toBe(400)
+    expect((await response.json()).error).toContain('после объединения превышает')
+  })
+
   it('подтверждает заполненные поля и пересчитывает фиксированную формулу после правок', async () => {
     const fields = { ...emptyFields(), title: 'Задача', topic: 'Магазин', context: 'Текущий процесс', need: 'Потребность' }
     const response = await post('/api/tasks/confirm', { fields, score: 100 })
@@ -142,6 +196,7 @@ describe('HTTP API подтверждения и публикации', () => {
     expect((await post('/api/ai', input(), { Origin: 'https://foreign.example' })).status).toBe(403)
     expect((await fetch(base + '/api/ai')).status).toBe(405)
     expect((await post('/api/ai', input(), { 'Content-Type': 'text/plain' })).status).toBe(415)
+    expect((await post('/api/ai', input(), { 'Content-Type': 'application/json-invalid' })).status).toBe(415)
     expect((await post('/api/ai', { ...input(), description: 'x'.repeat(20_001) })).status).toBe(400)
     expect((await post('/api/ai', { text: 'x'.repeat(MAX_REQUEST_BYTES) })).status).toBe(413)
     const invalid = await fetch(base + '/api/ai', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{broken' })

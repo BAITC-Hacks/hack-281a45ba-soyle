@@ -3,6 +3,7 @@ import { analyzeTask, CARD_TO_FIELD, cardToFields, generateTaskCard, getAnswerEx
 import { FIELD_KEYS, FIELD_LABELS, hasContent, normalizeVisibleText, type FieldKey, type Rating, type Task } from './domain'
 import { confirmTask, validatePublication } from './ratingApi'
 import { Icon, RatingPanel } from './components'
+import AIConnectionStatus from './AIConnectionStatus'
 import './editor.css'
 
 type EditorProps = {
@@ -76,6 +77,7 @@ export default function TaskEditor({ task, onSave, onCancel, onDirty }: EditorPr
   const [step, setStep] = useState<Step>(() => initialStep(task))
   const [questions, setQuestions] = useState<Question[]>([])
   const [answers, setAnswers] = useState<Record<string, string>>({})
+  const appliedAnswers = useRef<Record<string, string>>({})
   const [answersPending, setAnswersPending] = useState(false)
   const [cardAvailable, setCardAvailable] = useState(() => initialStep(task) === 2)
   const [cardGenerated, setCardGenerated] = useState(false)
@@ -101,6 +103,7 @@ export default function TaskEditor({ task, onSave, onCancel, onDirty }: EditorPr
       setStep(initialStep(task))
       setQuestions([])
       setAnswers({})
+      appliedAnswers.current = {}
       setAnswersPending(false)
       setCardAvailable(initialStep(task) === 2)
       setCardGenerated(false)
@@ -162,14 +165,20 @@ export default function TaskEditor({ task, onSave, onCancel, onDirty }: EditorPr
 
   function editAnswer(id: string, value: string) {
     if (operationRef.current) return
-    setAnswers((current) => ({ ...current, [id]: value }))
-    setAnswersPending(true)
+    const nextAnswers = { ...answers, [id]: value }
+    setAnswers(nextAnswers)
+    setAnswersPending(questions.some((question) => (nextAnswers[question.id] ?? '') !== (appliedAnswers.current[question.id] ?? '')))
     setFormError('')
     onDirty(true)
   }
 
-  function answerPayload(): Answer[] {
-    return questions.map((question) => ({ id: question.id, field: question.field, question: question.question, answer: answers[question.id] ?? '' }))
+  function answerPayload(onlyPending = false): Answer[] {
+    return questions.map((question) => {
+      const answer = answers[question.id] ?? ''
+      // Applied answers are already in the card. Replaying them could restore
+      // facts that the author has since corrected or removed by hand.
+      return { id: question.id, field: question.field, question: question.question, answer: onlyPending && answer === appliedAnswers.current[question.id] ? '' : answer }
+    })
   }
 
   function goToStep(next: Step) {
@@ -217,6 +226,7 @@ export default function TaskEditor({ task, onSave, onCancel, onDirty }: EditorPr
       if (requestId.current !== currentRequest) return
       setQuestions(result.questions)
       setAnswers({})
+      appliedAnswers.current = {}
       setAnswersPending(false)
       setAiMode(result.mode)
       setAnalysisSummary(result.summary)
@@ -246,12 +256,13 @@ export default function TaskEditor({ task, onSave, onCancel, onDirty }: EditorPr
     setOperation('card')
     setFormError('')
     try {
-      const result = await generateTaskCard(draft.source, draft.fields, answerPayload())
+      const result = await generateTaskCard(draft.source, draft.fields, answerPayload(true))
       if (requestId.current !== currentRequest) return
       const fields = cardToFields(result.card, draft.fields.topic)
       setDraft((current) => ({ ...current, fields, confirmedFields: [] }))
       setServerRating(undefined)
       setAiMode(result.mode)
+      appliedAnswers.current = { ...answers }
       setAnswersPending(false)
       setCardAvailable(true)
       setCardGenerated(true)
@@ -409,7 +420,8 @@ export default function TaskEditor({ task, onSave, onCancel, onDirty }: EditorPr
               <div className="editor-input-footer"><span id="editor-source-hint">Опишите текущую ситуацию, проблему и ваши ожидания.</span><span>{draft.source.length.toLocaleString('ru-RU')} / 20 000</span></div>
               {sourceError && <p className="form-error" id="editor-source-error" role="alert">{sourceError}</p>}
             </div>
-            <div className="editor-ai-note"><Icon name="spark" size={19}/><div><strong>От описания к понятной карточке</strong><p>Помощник сначала задаст вопросы, затем подготовит карточку из вашего описания и ответов. Неизвестные сведения останутся пустыми. Режим работы появится после ответа.</p><button type="button" className="btn btn-ghost editor-manual-card" disabled={busy || answersPending} onClick={openManualCard}>Заполнить карточку вручную<Icon name="arrow" size={15}/></button></div></div>
+            <AIConnectionStatus/>
+            <div className="editor-ai-note"><Icon name="spark" size={19}/><div><strong>От описания к понятной карточке</strong><p>Помощник сначала задаст вопросы, затем подготовит карточку из вашего описания и ответов. Неизвестные сведения останутся пустыми. Проверьте результат и подтвердите сведения перед публикацией.</p><button type="button" className="btn btn-ghost editor-manual-card" disabled={busy || answersPending} onClick={openManualCard}>Заполнить карточку вручную<Icon name="arrow" size={15}/></button></div></div>
           </>}
 
           {step === 1 && <>
