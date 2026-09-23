@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { confirmableFieldKeys } from "@/types";
+import { confirmableFieldKeys } from "../../types";
 
 const optionalText = z.string().trim().max(4000).nullable().optional();
 

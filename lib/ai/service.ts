@@ -28,7 +28,7 @@ function fallbackAnalysis(initialDescription: string) {
     interactionFormat: /встреч|онлайн|офлайн|созвон/i.test(lower) ? initialDescription : null,
   };
   const missingInformation = Object.entries(detectedInformation).filter(([, value]) => !value).map(([key]) => key);
-  let questions = questionBank.filter((item) => missingInformation.includes(item.key)).map((item) => item.question).slice(0, 5);
+  let questions: string[] = questionBank.filter((item) => missingInformation.includes(item.key)).map((item) => item.question).slice(0, 5);
   if (questions.length < 3) {
     questions = [...questions, "Что в этой задаче имеет самый высокий приоритет?", "Какой объём решения реалистичен для первого прототипа?", "Какие факты команда должна обязательно учесть?"].slice(0, 3);
   }

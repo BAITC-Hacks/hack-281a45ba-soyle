@@ -1,21 +1,32 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useSyncExternalStore } from "react";
 
 export type DemoRole = "BUSINESS" | "TEAM";
 
-export function RoleSwitcher() {
-  const [role, setRole] = useState<DemoRole>("BUSINESS");
+function subscribe(callback: () => void) {
+  window.addEventListener("storage", callback);
+  window.addEventListener("soyle-role", callback);
+  return () => {
+    window.removeEventListener("storage", callback);
+    window.removeEventListener("soyle-role", callback);
+  };
+}
 
-  useEffect(() => {
-    const saved = window.localStorage.getItem("soyle-role");
-    if (saved === "BUSINESS" || saved === "TEAM") setRole(saved);
-  }, []);
+function getRoleSnapshot(): DemoRole {
+  return window.localStorage.getItem("soyle-role") === "TEAM" ? "TEAM" : "BUSINESS";
+}
+
+export function useDemoRole() {
+  return useSyncExternalStore(subscribe, getRoleSnapshot, () => "BUSINESS");
+}
+
+export function RoleSwitcher() {
+  const role = useDemoRole();
 
   function choose(next: DemoRole) {
-    setRole(next);
     window.localStorage.setItem("soyle-role", next);
-    window.dispatchEvent(new CustomEvent("soyle-role", { detail: next }));
+    window.dispatchEvent(new Event("soyle-role"));
   }
 
   return (

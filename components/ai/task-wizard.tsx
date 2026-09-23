@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useMemo, useState } from "react";
 import { calculateReadiness } from "@/lib/scoring/calculate-readiness";
 import { ReadinessPanel } from "@/components/score/readiness-panel";
-import type { ApiResponse, TaskFieldKey, TaskView } from "@/types";
+import type { ApiResponse, TaskView } from "@/types";
 
 type Analysis = {
   questions: string[];

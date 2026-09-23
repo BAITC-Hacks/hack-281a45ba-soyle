@@ -1,23 +1,15 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import type { ApiResponse, ProposalView } from "@/types";
-import type { DemoRole } from "@/components/layout/role-switcher";
+import { useDemoRole } from "@/components/layout/role-switcher";
 
 export function ProposalSection({ taskId, published }: { taskId: string; published: boolean }) {
-  const [role, setRole] = useState<DemoRole>("BUSINESS");
+  const role = useDemoRole();
   const [open, setOpen] = useState(false);
   const [pending, setPending] = useState(false);
   const [success, setSuccess] = useState(false);
   const [error, setError] = useState("");
-
-  useEffect(() => {
-    const read = () => { const value = window.localStorage.getItem("soyle-role"); setRole(value === "TEAM" ? "TEAM" : "BUSINESS"); };
-    read();
-    const listener = (event: Event) => setRole((event as CustomEvent<DemoRole>).detail);
-    window.addEventListener("soyle-role", listener);
-    return () => window.removeEventListener("soyle-role", listener);
-  }, []);
 
   async function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault(); setPending(true); setError("");
