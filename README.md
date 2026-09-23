@@ -1,153 +1,161 @@
-# SOYLE
+# Soyle
 
-## About
+Работающий MVP платформы, на которой бизнес уточняет и публикует практические задачи, а студенческие команды предлагают решения. Полный сценарий: описание → AI-вопросы → ответы → AI-карточка → ручное редактирование и подтверждение → рейтинг от backend → публикация → отклик → решение бизнеса → подтверждение этапа.
 
-SOYLE is a working hackathon MVP that connects businesses with student teams. It turns an incomplete problem statement into an editable, structured task, explains how ready that task is for publication, and supports team proposals with manual business decisions.
+## Запуск
 
-The product interface is in Russian. This document uses English for contributor clarity.
+Пошаговая инструкция: [START.md](START.md).
 
-## Hackathon problem
+Нужен Node.js версии 22.12+ из ветки 22 либо версии 24+ и npm. Проект проверен на Node.js 24.11.1. В корне проекта:
 
-Business requests often arrive without the context, data, constraints or success criteria a student team needs. Teams spend time clarifying the brief, while businesses have no transparent way to see what is missing.
-
-## Solution
-
-SOYLE asks focused questions, produces a structured card using only user-provided facts and calculates a deterministic readiness score. The business can edit and confirm every field before publishing. Student teams then browse the shared catalog and submit proposals.
-
-## User flow
-
-1. Switch to `BUSINESS` and create a task from a free-form description.
-2. Answer at least three AI-generated clarification questions.
-3. Review, edit and confirm the generated fields.
-4. Inspect the score breakdown and publish the task.
-5. Switch to `TEAM`, open the task in the catalog and submit a proposal.
-6. Switch back to `BUSINESS`, review proposals and accept or reject them manually.
-
-## Features
-
-- five-step business task wizard;
-- local demo role switcher (`BUSINESS` / `TEAM`);
-- task editor with field-level confirmation;
-- published catalog with industry, readiness and sorting controls;
-- complete task pages with missing-field handling;
-- proposal submission and team history;
-- business dashboard and manual proposal decisions;
-- loading, empty, validation, success and failure states;
-- responsive layouts for phone, tablet and desktop.
-
-## AI functionality
-
-`POST /api/ai/analyze` finds explicitly provided information and returns at least three relevant questions. `POST /api/ai/generate-card` turns the original description and answers into a structured card. Prompts prohibit invented business facts, and Zod validates every AI result before it is returned.
-
-If `OPENAI_API_KEY` is absent or the provider is unavailable, the application uses a deterministic local path explicitly labeled `DEMO FALLBACK`. An invalid provider response is rejected with a retryable error and is never saved.
-
-## Readiness scoring
-
-The score is calculated in `lib/scoring/calculate-readiness.ts`. A field receives points only when it has a non-whitespace value and the business has confirmed it.
-
-| Field | Points |
-| --- | ---: |
-| Context | 10 |
-| Need | 10 |
-| Data and materials | 20 |
-| Expected result | 15 |
-| Success criteria | 15 |
-| Constraints | 10 |
-| Users | 10 |
-| Contact | 5 |
-| Interaction format | 5 |
-
-Levels are `REQUIRES_CLARIFICATION` (0–39), `WORKING` (40–69), `READY` (70–89) and `PRIORITY` (90–100). A low score never prevents publication.
-
-## Architecture
-
-The application is a single Next.js App Router project. Route Handlers call server-side services; services access SQLite through Prisma. Scoring is pure domain code. OpenAI access is server-only. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for decisions, routes, security and excluded scope.
-
-## Tech stack
-
-- Next.js, React, TypeScript
-- Tailwind CSS
-- Prisma ORM and SQLite
-- Zod
-- official OpenAI Node SDK
-- Vitest
-
-## Project structure
-
-```text
-app/                  pages and API route handlers
-components/           layout, task, score, AI and proposal UI
-docs/ARCHITECTURE.md  architecture and domain decisions
-lib/ai/               prompts, client, schemas and fallback service
-lib/db/               Prisma singleton
-lib/scoring/          deterministic readiness engine
-lib/services/         task and proposal use cases
-lib/validation/       Zod transport schemas
-prisma/               SQLite schema and synthetic seed
-tests/                readiness and validation tests
-types/                shared domain and API types
-```
-
-## Getting started
-
-Requirements: Node.js 20+ and npm.
-
-```bash
+```sh
 npm install
-npm run db:generate
-npm run db:push
-npm run db:seed
-```
-
-On Windows PowerShell, use `npm.cmd` if script execution policy blocks `npm.ps1`.
-
-## Environment variables
-
-Copy `.env.example` to `.env.local` only when a live OpenAI call is wanted:
-
-```text
-OPENAI_API_KEY=
-```
-
-The key is optional for the demo and must never be committed. `OPENAI_MODEL` may be set server-side to override the default model, although it is intentionally omitted from the minimal example file.
-
-## Database
-
-SQLite is stored at `prisma/dev.db` and ignored by Git. `BusinessTask` has many `Proposal` records. Confirmed task fields are serialized as JSON text because SQLite has no native string-array field. The readiness score is always derived and is not stored.
-
-The seed command resets local demo records and creates five synthetic tasks with scores of 25, 45, 65, 80 and 95, plus five proposals. Do not run it against data you want to keep.
-
-## Running locally
-
-```bash
 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000). A production-style run uses `npm run build` followed by `npm run start`.
+Откройте адрес из терминала — обычно [http://127.0.0.1:5173](http://127.0.0.1:5173). В Windows PowerShell при запрете запуска `npm.ps1` используйте `npm.cmd install` и `npm.cmd run dev`; изменять политику выполнения не требуется.
 
-## Tests
+Одна команда запускает интерфейс и локальный Node.js backend. По умолчанию `AI_MODE=mock`: ключ и интернет для AI не требуются, но оба AI-этапа и подтверждение проходят через HTTP API. `npm run preview` также обслуживает API. Открытия `index.html` с диска или размещения только `dist/` на статическом хостинге недостаточно.
 
-```bash
-npm run lint
-npm run typecheck
-npm run test
-npm run build
+```sh
+npm run build       # проверка TypeScript и сборка в dist/
+npm run preview     # просмотр готовой сборки
+npm test            # проверки бизнес-логики
+npm run test:e2e    # браузерные сценарии Playwright
 ```
 
-Tests cover readiness weights, whitespace and confirmation rules, all level boundaries, determinism, URL validation, publication enums and AI schemas.
+Браузерные проверки запускаются в установленном Google Chrome в фоновом режиме (`channel: 'chrome'` в `playwright.config.ts`). Если Chrome отсутствует, установите его либо выполните `npx playwright install chromium` и удалите настройку `channel` из конфигурации. Playwright сам запускает сервер на порту 5173 или использует уже запущенный. Установка зависимостей и браузера требует интернета; работа установленного приложения не требует внешнего AI API.
 
-## Demo scenario
+## Возможности
 
-Use the prefilled weak input: “У нас учебный центр. Хотим улучшить работу с учениками и понимать, почему некоторые перестают ходить.” Continue through the questions, confirm fields, inspect the changed score and publish. Open the published task as `TEAM`, send a proposal, return to the business dashboard and accept or reject it.
+- Две демонстрационные роли: бизнес и студенческая команда. В роли команды можно выбрать один из пяти профилей.
+- Два AI-этапа: анализ описания с минимум тремя вопросами, затем формирование карточки из описания и отдельных ответов. У вопросов и всех 11 полей есть примеры; они не подставляются автоматически. Неизвестные сведения остаются пустыми.
+- Рейтинг 0–100, рассчитанный backend по фиксированной формуле, с расшифровкой и пересчетом после подтверждения сведений.
+- Каталог опубликованных задач, поиск, фильтры по теме и готовности, сортировка по рейтингу.
+- Предложение команды с идеей, планом, сроком и ссылкой на прототип.
+- Ручной выбор или отклонение предложения бизнесом. Можно принять несколько команд или не выбрать ни одной.
+- Подтверждение выполненного этапа выбранной команды: +50 баллов за прогресс один раз для этого этапа.
+- Сохранение в браузере, скачивание и загрузка резервных копий, восстановление демонстрационных данных после подтверждения.
+- Предупреждения о несохраненной форме, ошибке хранения и изменениях в другой вкладке с возможностью скачать свою работу.
 
-## Security
+Разделы интерфейса: «Каталог задач», «Мои задачи» для бизнеса, «Отклики команд» или «Мои отклики» в зависимости от роли, «Команды», «Как это работает».
 
-AI calls are server-only. API inputs and generated structures are validated. `.env` files and the SQLite database are ignored. No route returns stack traces or environment values. The role switcher is only a demo aid and does not provide authorization.
+## Рейтинг готовности
 
-## Limitations
+Рейтинг характеризует полноту подтвержденного описания задачи. Он не оценивает качество решения команды и не рассчитывается языковой моделью. «Подтвердить сведения» вызывает `POST /api/tasks/confirm`: backend проверяет поля и возвращает подтвержденные поля и расчет. Перед публикацией `POST /api/tasks/publish` повторно проверяет название, тему, подтверждение всех заполненных полей и рейтинг.
 
-The MVP has no user accounts or production access control. Demo proposals are shown together on the team page. The fallback extracts a small deterministic set of cues and is less capable than a configured model.
+Формула оформлена общей чистой функцией: клиент использует ее для предварительного отображения черновика и сохраненных подтвержденных карточек. Подтверждение и публикация требуют успешного ответа backend; локальное отображение баллов не заменяет эти запросы.
 
-## Future development
+| Критерий | Максимум | Условие начисления |
+| --- | ---: | --- |
+| Контекст и потребность | 20 | 10 за контекст, 10 за потребность |
+| Данные и материалы | 20 | Поле заполнено и подтверждено |
+| Ожидаемый результат | 15 | Поле заполнено и подтверждено |
+| Критерии успеха | 15 | Поле заполнено и подтверждено |
+| Ограничения | 10 | Поле заполнено и подтверждено |
+| Целевые пользователи | 10 | Поле заполнено и подтверждено |
+| Связь с бизнесом | 10 | 5 за контакт, 5 за формат взаимодействия |
 
-Replace the role switcher with authentication and ownership checks, add organization/team profiles, audit proposal decisions, introduce notifications and attachments, and move from SQLite to a production database when the workflow is validated.
+Сумма всех начисленных баллов дает рейтинг. Пустая строка, одни пробелы или только невидимые символы дают 0. За каждое отдельное поле начисляется весь его вес или 0. Кнопка «Подтвердить сведения» подтверждает все текущие непустые поля. Изменение поля снимает подтверждение именно с него; такие сведения нужно подтвердить заново. Название и тема нужны для публикации, но баллов не добавляют.
+
+| Баллы | Уровень |
+| --- | --- |
+| 0–39 | Черновик |
+| 40–69 | Рабочая |
+| 70–89 | Готовая |
+| 90–100 | Приоритетная |
+
+Публикация и готовность — разные свойства задачи. Уровень готовности «Черновик» означает 0–39 баллов; такая задача может быть опубликована. Можно подтвердить и опубликовать неполную карточку с названием и темой: все введенные непустые поля должны быть подтверждены, а остальные могут оставаться пустыми. Низкий рейтинг не закрывает доступ в каталог и не блокирует отклики. Неопубликованные задачи в общий каталог не попадают; приоритетные задачи выделяются визуально.
+
+Начисление баллов за полноту намеренно детерминировано: MVP не проверяет фактическую достоверность текста и не использует модель для оценки его качества. Подтверждение владельца — обязательная часть сценария.
+
+## AI-функция и режимы
+
+Существующий помощник использует один endpoint `POST /api/ai` с двумя стадиями. `stage: "questions"` получает описание и текущие поля, возвращает минимум три вопроса с идентификаторами `q1`, `q2` и связью с полями карточки. Ответы пользователя хранятся отдельно. После «Сформировать карточку» запрос `stage: "card"` передает исходное описание и ответы; результатом является структурированная редактируемая карточка. Анализ, ответы и сформированная карточка сами по себе не подтверждают сведения.
+
+По умолчанию работает **явно обозначенный серверный mock**. Он не вызывает языковую модель: детерминированные правила выбирают вопросы и переносят только предоставленные сведения. Настоящий режим использует одного провайдера — OpenAI Responses API со структурированным JSON. Ошибка провайдера показывается пользователю, без незаметной подмены ответа заглушкой.
+
+Для mock файл `.env` не нужен. Для включения OpenAI скопируйте `.env.example` в `.env`, задайте серверные переменные и перезапустите `npm run dev` или `npm run preview`:
+
+```dotenv
+AI_MODE=openai
+OPENAI_API_KEY=ваш_ключ
+OPENAI_MODEL=gpt-4o-mini
+```
+
+`AI_MODE=mock` остается режимом по умолчанию даже при наличии ключа. Ключ используется только backend; не добавляйте к нему префикс `VITE_` и не помещайте его в клиентский код. `.env` исключен из Git. Для демонстрации и E2E используется mock; запуск с реальным ключом в текущем окружении не проверялся.
+
+AI-контракт включает `title`, `context`, `need`, `users`, `data`, `constraints`, `expected_result`, `success_criteria`, `contact`, `interaction_format`. Внутри существующей модели последние три соответствующих поля называются `result`, `success`, `interaction`; адаптер сохраняет совместимость. Тема остается отдельным редактируемым полем каталога. Неизвестные значения возвращаются как `null` и отображаются пустыми. Сервер проверяет схему и соответствие извлеченных фрагментов предоставленному тексту, чтобы не принимать добавленные факты.
+
+Промпты, полный контракт и ограничения находятся в [docs/ai-contract.md](docs/ai-contract.md). Обрабатываются тайм-аут, недоступность API, пустой или некорректный JSON, неполный ответ и превышение лимита. Ошибка сохраняет описание и ответы для повторной попытки. Помощник не рассчитывает баллы, не публикует задачу и не выбирает команду.
+
+Примеры под вопросами и полями — иллюстрации структуры ответа. Значения, сроки и метрики нужно заменить своими. Открытие примера не заполняет поле, не подтверждает сведения и не увеличивает рейтинг.
+
+## Архитектура и данные
+
+Стек: React 19, TypeScript, Vite 7 и Node.js backend в middleware Vite для dev и preview. Backend обрабатывает AI и расчет готовности, а данные задач и откликов хранятся в браузере. Шрифты включены в сборку и не загружаются с Google Fonts во время работы. Vitest проверяет бизнес-правила и серверные контракты, Playwright — пользовательские сценарии через HTTP.
+
+| Файл | Назначение |
+| --- | --- |
+| `src/App.tsx` | Навигация, состояние, каталог, списки откликов и команд |
+| `src/TaskEditor.tsx` | Описание, вопросы, карточка, подтверждение и публикация |
+| `src/TaskDetail.tsx` | Просмотр задачи, форма предложения, решение бизнеса и приемка этапа |
+| `src/components.tsx` | Иконки, индикатор и расшифровка рейтинга |
+| `src/styles.css`, `src/editor.css`, `src/detail.css` | Стили интерфейса |
+| `src/domain.ts` | Типы и правила рейтинга, решений и прогресса |
+| `src/seed.ts` | Начальный синтетический набор |
+| `src/storage.ts` | Чтение, проверка и сохранение состояния |
+| `src/useProjectStorage.ts` | Сохранение действий, конфликты вкладок, повтор записи и состояние в памяти |
+| `src/DataTools.tsx`, `src/download.ts` | Экспорт, проверка импорта и восстановление демоданных |
+| `src/ErrorBoundary.tsx` | Экран восстановления после непредвиденной ошибки интерфейса |
+| `src/ai.ts` | Существующий AI-клиент, контракты стадий, промпты, mock-логика и валидация |
+| `src/ratingApi.ts` | HTTP-клиент подтверждения и проверки публикации |
+| `server/` | Обработчики API и серверный адаптер единственного LLM-провайдера |
+
+Данные записываются в `localStorage` под ключом `sana-mvp-v1` в формате версии 1. Исходный ключ сохранен после переименования приложения, чтобы не потерять существующие данные. Проверяются структура, обязательные поля, подтверждения, даты, ссылки и связи задач, команд и откликов. При чтении поврежденного сохранения приложение показывает демонстрационный набор и предупреждение. Перед заменой исходная строка сохраняется отдельно в `sana-mvp-v1-recovery`; ее можно скачать кнопкой «Скачать исходное сохранение». Если архивирование невозможно, исходная запись не перезаписывается.
+
+Первый запуск создает синтетические данные: 5 черновиков разной полноты, 5 опубликованных карточек с рейтингами 30, 60, 75, 90 и 100, 5 команд с интересами, навыками и технологиями, 7 откликов в разных статусах. Сброс доступен в «Как это работает» → «Восстановить демоданные», требует подтверждения и возвращает этот набор, удаляя локальные изменения.
+
+Для демонстрации все бизнес-задачи принадлежат одному профилю владельца. Переключатель ролей имитирует взаимодействие участников внутри одного браузера. После перезагрузки снова выбирается роль бизнеса; задачи, предложения и решения сохраняются. Это не авторизация: общей базы данных, изоляции доступа и синхронизации между устройствами нет. Данные привязаны к браузеру и адресу сайта; очистка данных сайта удаляет их. Для последовательной демонстрации используйте один и тот же адрес, например `127.0.0.1`, не переключаясь на `localhost`.
+
+В MVP принят один подтверждаемый этап на принятое предложение. Повторное подтверждение не добавляет еще 50 баллов. Результат работы принимает представитель бизнеса вручную; баллы команды и рейтинг готовности задачи независимы.
+
+## Как сохранить работу
+
+В разделе «Как это работает» кнопка «Скачать копию» выгружает JSON с задачами, командами, откликами и прогрессом. «Загрузить копию» принимает файл до 5 МБ, проверяет его целиком и показывает количество записей перед подтверждением замены. Отмена или некорректный файл оставляют текущие данные без изменений. Перед импортом или сбросом скачайте собственную копию.
+
+Общая копия включает состояние приложения, в том числе изменения, которые пока существуют только в памяти из-за ошибки записи. Текст, набранный в форме без нажатия кнопки сохранения или отправки, в нее не входит. Отдельная кнопка редактора «Скачать текущий черновик» выгружает одну задачу, вопросы и ответы, в том числе после неудачной генерации, для ручного восстановления; такой файл нельзя импортировать как общую копию приложения. Если ответы изменены, сначала сформируйте из них карточку, затем сохраняйте ее.
+
+Если хранилище заполнено или отключено, появляется постоянное предупреждение. Изменения остаются в текущей вкладке: скачайте их или устраните причину и нажмите «Повторить сохранение». До успешной записи не закрывайте и не перезагружайте страницу. Переход из измененной формы, смена роли или команды требуют подтверждения отказа от набранного текста.
+
+При изменении данных в другой вкладке следующая запись устаревшей версии блокируется. Сначала можно скачать свою версию, затем нажать «Загрузить обновления» и подтвердить замену состояния вкладки. Это обнаружение конфликтов, а не распределенная база данных: автоматического объединения и атомарных транзакций между вкладками нет. **Редактируйте данные в одной вкладке**; копия при конфликте отражает версию этой вкладки и может не включать последние изменения другой.
+
+## Проверка и демонстрация
+
+Сценарий защиты с подготовленными текстами: [docs/demo.md](docs/demo.md), до пяти минут.
+
+`tests/mvp.spec.ts` проходит два AI-этапа через HTTP в mock-режиме, проверяет backend-расчеты 20 и 100 баллов и публикацию, фильтры, низкий рейтинг, отклики, решения и однократные баллы. Регрессии покрывают некорректный JSON на обоих AI-этапах с сохранением ввода и повтором, примеры без автозаполнения, невидимые символы, сохранность формы при отмене смены роли/команды, импорт и экспорт копий, конфликт вкладок, переполнение хранилища и скачивание поврежденного оригинала. В браузере не должно быть прямых обращений к внешнему AI-провайдеру. Скриншоты каталога, вопросов, редактора и карточки записываются в `.artifacts/`. При ошибке Playwright сохраняет скриншот и трассу в `test-results/`.
+
+| Сценарий | Ожидаемое поведение |
+| --- | --- |
+| Короткое описание задачи | Помощник предлагает минимум три вопроса |
+| Формирование карточки | Второй AI-запрос структурирует описание и ответы, результат можно исправить |
+| Подтверждение дополнений | Backend возвращает рейтинг по таблице; пустые поля не учитываются |
+| Публикация | После ручного подтверждения задача появляется в каталоге |
+| Фильтры и сортировка | Список соответствует выбранной теме, уровню и порядку |
+| Отправка предложения | Отклик виден команде и бизнесу после переключения роли |
+| Выбор и отклонение | Статус изменяется только по действию бизнеса; допускается несколько принятых команд |
+| Подтверждение этапа | Выбранная команда получает +50 баллов однократно |
+| Перезагрузка | Сохраненные карточки, отклики и решения остаются |
+| Отсутствие ключа внешнего AI | Сценарий проходит через локальный backend в обозначенном mock-режиме |
+| Некорректный AI-ответ | Форма остается доступной, описание и ответы сохраняются для повтора |
+| Опубликованная карточка 0–39 | Команда может отправить предложение |
+| Сброс демонстрационных данных | Отмена сохраняет данные, подтверждение восстанавливает исходный набор |
+| Примеры ответов | Показывают формат ответа, не подставляют сведения и не добавляют баллы |
+| Резервная копия | Экспорт возвращает состояние; импорт заменяет его только после проверки и подтверждения |
+| Конфликт вкладок | Новая версия не затирается; локальный ввод можно скачать перед загрузкой обновлений |
+| Ошибка записи | Видно предупреждение; изменения можно скачать из памяти или сохранить повторно |
+
+## Границы MVP
+
+Нет полноценной регистрации, чата, уведомлений, календаря, загрузки материалов задач, общей базы данных и проектного трекера. Backend обрабатывает запросы, но не хранит проекты и не предоставляет авторизацию. Загрузка файлов поддерживается только для JSON-копий состояния. Ссылка на прототип — текстовый URL. Демонстрационные контакты и профили синтетические. Для работы разных пользователей потребуются серверное хранение, авторизация и правила доступа; статический `dist/` без API не обеспечивает основной сценарий.
